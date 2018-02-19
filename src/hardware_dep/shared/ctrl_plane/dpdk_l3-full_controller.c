@@ -17,12 +17,14 @@
 #include <stdio.h>
 #include <string.h>
 #include <arpa/inet.h>
+#include <stdlib.h>
 
-#define MAX_IPS 60000
+#define MAX_IPS 600
+#define MAX_NHOPS 100
 
 controller c;
 
-void fill_ipv4_lpm_table(uint8_t ip[4], uint32_t nhgrp)
+void fill_ipv4_lpm_table(uint8_t ip[4], uint8_t prefix_len, uint32_t nhgrp)
 {
     char buffer[2048]; /* TODO: ugly */
     struct p4_header* h;
@@ -39,7 +41,7 @@ void fill_ipv4_lpm_table(uint8_t ip[4], uint32_t nhgrp)
     lpm = add_p4_field_match_lpm(te, 2048);
     strcpy(lpm->header.name, "ipv4.dstAddr");
     memcpy(lpm->bitmap, ip, 4);
-    lpm->prefix_length = 16;
+    lpm->prefix_length = prefix_len;
 
     a = add_p4_action(h, 2048);
     strcpy(a->description.name, "set_nhop");
@@ -114,17 +116,26 @@ void dhf(void* b) {
 }
 
 void init_simple() {
+        printf("Initing Simple...\n");
 	uint8_t ip[4] = {10,0,99,99};
 	uint8_t mac[6] = {0xd2, 0x69, 0x0f, 0xa8, 0x39, 0x9c};
     uint8_t smac[6] = {0xd2, 0x69, 0x0f, 0x00, 0x00, 0x9c};
 	uint8_t port = 15;
     uint32_t nhgrp = 0;
 
-	fill_ipv4_lpm_table(ip, nhgrp);
+	fill_ipv4_lpm_table(ip, 16, nhgrp);
     fill_nexthops_table(nhgrp, port, smac, mac);
 }
 
-uint32_t ip_array[MAX_IPS];
+typedef struct LPM_IP
+{
+    uint32_t ip;
+    uint8_t prefix_len;
+    uint32_t nhgrp;
+}  lpm_ip_t;
+
+
+lpm_ip_t ip_array[MAX_IPS];
 int ip_count = -1;
 
 int read_ip_prefixes_from_file(char *filename) {
@@ -136,32 +147,98 @@ int read_ip_prefixes_from_file(char *filename) {
 
 	while (fgets(line, sizeof(line), f)) {
 		line[strlen(line)-1] = '\0';
-		if (inet_pton(AF_INET, line, &(ip_array[++ip_count])) != 1) { /*TODO: check if it is in big-endian or not!!!*/
+                char *token = strtok(line, ";");
+                char *ip = malloc(strlen(token) + 1);
+                strcpy(ip, token);
+		if (inet_pton(AF_INET, ip, &(ip_array[++ip_count].ip)) != 1) { /*TODO: check if it is in big-endian or not!!!*/
 			printf("%s is not an ip address.\n",line);
 			fclose(f);
 			return -1;
 		}
+                token = strtok(NULL, ";");
+                ip_array[ip_count].prefix_len = (uint8_t)atoi(token);
+                token = strtok(NULL, ";");
+                ip_array[ip_count].nhgrp = (uint32_t)atoi(token);
 	}
 
 	fclose(f);
 	return 0;
 }
 
+typedef struct NhopGRP
+{
+    uint8_t* mac;
+    uint8_t* smac;
+    uint8_t port;
+    uint32_t nhgrp;
+}  nhopgrp_t;
+
+nhopgrp_t nexthop[MAX_NHOPS];
+int nexthop_count = -1;
+
+uint8_t* get_mac_from_str(char* mac){
+    uint8_t *mac_addr = malloc(6*sizeof(uint8_t));
+    char *token = strtok(mac, ":");
+    mac_addr[0] = (uint32_t)strtol(token, NULL, 16);
+    token = strtok(NULL, ":");
+    mac_addr[1] = (uint32_t)strtol(token, NULL, 16);
+    token = strtok(NULL, ":");
+    mac_addr[2] = (uint32_t)strtol(token, NULL, 16);
+    token = strtok(NULL, ":");
+    mac_addr[3] = (uint32_t)strtol(token, NULL, 16);
+    token = strtok(NULL, ":");
+    mac_addr[4] = (uint32_t)strtol(token, NULL, 16);
+    token = strtok(NULL, ":");
+    mac_addr[5] = (uint32_t)strtol(token, NULL, 16);
+    return mac_addr;
+}
+
+int read_nhops_from_file(char *filename) {
+	FILE *f;
+	char line[100];
+        strcat(filename, ".nhops");
+	f = fopen(filename, "r");
+	if (f == NULL) return -1;
+
+	while (fgets(line, sizeof(line), f)) {
+                nexthop_count++;
+		line[strlen(line)-1] = '\0';
+                char *token = strtok(line, ";");
+                char mac[18]; 
+                strcpy(mac, token);
+                token = strtok(NULL, ";");
+                char smac[18]; 
+                strcpy(smac, token);
+                token = strtok(NULL, ";");
+                nexthop[nexthop_count].port = (uint8_t)atoi(token);
+                token = strtok(NULL, ";");
+                nexthop[nexthop_count].nhgrp = (uint32_t)atoi(token);
+                nexthop[nexthop_count].mac = get_mac_from_str(mac);
+                nexthop[nexthop_count].smac = get_mac_from_str(smac);
+	}
+
+	fclose(f);
+	return 0;
+}
 
 void init_complex() {
-	uint8_t mac[6] = {0xd2, 0x69, 0x0f, 0xa8, 0x39, 0x9c};
-    uint8_t smac[6] = {0xd2, 0x69, 0x0f, 0x00, 0x00, 0x9c};
-	uint8_t port = 1;
-    uint32_t nhgrp = 0;
+        printf("Initing complex\n");
+	//uint8_t mac[6] = {0xd2, 0x69, 0x0f, 0xa8, 0x39, 0x9c};
+        //uint8_t smac[6] = {0xd2, 0x69, 0x0f, 0x00, 0x00, 0x9c};
+	//uint8_t port = 1;
+        //uint32_t nhgrp = 0;
 	int i=0;
 
 	for (;i<=ip_count;++i) {
 		/* Delegate routing table entries */
-		fill_ipv4_lpm_table((uint8_t*)&(ip_array[i]), nhgrp);
+		fill_ipv4_lpm_table((uint8_t*)&(ip_array[i].ip), ip_array[i].prefix_len, ip_array[i].nhgrp);
 	}
-
-    fill_nexthops_table(nhgrp, port, smac, mac);
-
+        i=0;
+	for (;i<=nexthop_count;++i) {
+		/* Delegate routing table entries */
+		//fill_ipv4_lpm_table((uint8_t*)&(ip_array[i].ip), ip_array[i].prefix_len, ip_array[i].nhgrp);
+                fill_nexthops_table(nexthop[i].nhgrp, nexthop[i].port, nexthop[i].smac, nexthop[i].mac);
+	}
 }
 
 
@@ -179,7 +256,15 @@ int main(int argc, char* argv[])
 			printf("File cannnot be opened...\n");
 			return -1;
 		}
+                printf("Done IPs\n");
+		printf("Loading nhop data...\n");
+		if (read_nhops_from_file(argv[1])<0) {
+			printf("Nhops file cannnot be opened...\n");
+			return -1;
+		}
+                printf("Done Nhop\n");
 		c = create_controller_with_init(11111, 3, dhf, init_complex);
+                printf("Done Init\n");
 	}
 	else {
 		c = create_controller_with_init(11111, 3, dhf, init_simple);
