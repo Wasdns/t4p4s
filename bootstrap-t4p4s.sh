@@ -1,3 +1,5 @@
+set -e
+
 # Set sensible defaults
 export DPDK_VSN=${DPDK_VSN-17.08}
 export PARALLEL_INSTALL=${PARALLEL_INSTALL-1}
